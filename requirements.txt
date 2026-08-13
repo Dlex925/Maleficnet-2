@@ -1,0 +1,11 @@
+# Modern, unpinned — code updated to current APIs (weights=, task-free accuracy,
+# accelerator=, PL2 Logger/Callback). Use a recent Python (3.11–3.13).
+torch
+torchvision
+pytorch-lightning
+numpy
+scipy
+pyldpc
+bitstring
+tqdm
+Pillow
