@@ -17,7 +17,8 @@ class VGG16(pl.LightningModule):
         self.dim = input_shape
         self.num_classes = num_classes
 
-        self.model = models.vgg16_bn(weights="DEFAULT")
+        #self.model = models.vgg16_bn(weights="DEFAULT")
+        self.model = models.vgg16(weights="DEFAULT") # Testing, the bn might be the problem when not training
         if not only_pretrained:
             num_ftrs = self.model.classifier[6].in_features
             self.model.classifier[6] = nn.Linear(num_ftrs, num_classes)
