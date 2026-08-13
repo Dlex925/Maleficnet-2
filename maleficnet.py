@@ -153,6 +153,9 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     if message_length is None:
         message_length = injector.get_message_length(model)
 
+    rand_model = initialize_model(model_name, dim, num_classes, only_pretrained)
+    if not only_pretrained: #Added extra
+        rand_model.apply(weights_init_normal)
 
     if not fine_tuning:
         trainer = pl.Trainer(max_epochs=epochs,
@@ -196,6 +199,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         extractor_callback = ExtractorCallback(when=5,
                                                extractor=extractor,
                                                logger=log,
+                                               rand_model=rand_model,
                                                message_length=message_length,
                                                payload=payload)
 
@@ -215,7 +219,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         #trainer.test(model, data)
         del trainer
 
-    success = extractor.extract(model, message_length, payload)
+    success = extractor.extract(model, rand_model, message_length, payload)
     log.info('System  {}'.format(
         'successfully! ' if success else 'unsuccessfully :('))
 

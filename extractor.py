@@ -54,36 +54,42 @@ class Extractor:
         self.H, self.G = make_ldpc(
             n, d_v, d_c, systematic=True, sparse=True, seed=seed)
 
-    def extract(self, model, message_length, malware_name):
+    def extract(self, model, rand_model, message_length, payload_name):
         extraction_path = self.result_path
         extraction_path.mkdir(parents=True, exist_ok=True)
 
         start = time.time()
+        st_dict_prev = rand_model.state_dict()
         st_dict_next = model.state_dict()
 
+        models_w_prev = []
         models_w_curr = []
 
         layer_lengths = dict()
         total_params = 0
 
-        layers = [n for n in st_dict_next.keys() if "weight" in str(n)][:-1]
+        layers = [n for n in st_dict_prev.keys() if "weight" in str(n)][:-1]
         for layer in layers:
+            x_prev = st_dict_prev[layer].detach().cpu().numpy().flatten()
+            models_w_prev.extend(list(x_prev))
             x_curr = st_dict_next[layer].detach().cpu().numpy().flatten()
             models_w_curr.extend(list(x_curr))
-            layer_lengths[layer] = len(x_curr)
-            total_params += len(x_curr)
+            layer_lengths[layer] = len(x_prev)
+            total_params += len(x_prev)
 
+        models_w_prev = np.array(models_w_prev)
         models_w_curr = np.array(models_w_curr)
+        models_w_delta = np.subtract(models_w_curr, models_w_prev)
 
         number_of_chunks = math.ceil(message_length / self.CHUNK_SIZE)
-        if self.CHUNK_SIZE * self.chunk_factor * number_of_chunks > len(models_w_curr):
+        if self.CHUNK_SIZE * self.chunk_factor * number_of_chunks > len(models_w_prev):
             self.logger.critical(
                 f'Spreading codes cannot be bigger than the model!')
             return
 
         np.random.seed(self.seed)
         filter_indexes = np.random.randint(
-            0, len(models_w_curr), self.CHUNK_SIZE * self.chunk_factor * number_of_chunks, np.int32).tolist()
+            0, len(models_w_prev), self.CHUNK_SIZE * self.chunk_factor * number_of_chunks, np.int32).tolist()
 
         x = []
         ys = []
@@ -98,7 +104,7 @@ class Extractor:
                     [-1, 1], size=self.CHUNK_SIZE * self.chunk_factor)
                 current_filter_index = filter_indexes[current_chunk * self.CHUNK_SIZE * self.chunk_factor:
                                                       (current_chunk + 1) * self.CHUNK_SIZE * self.chunk_factor]
-                current_models_w_delta = models_w_curr[current_filter_index]
+                current_models_w_delta = models_w_delta[current_filter_index]
                 y_i = np.matmul(spreading_code.T, current_models_w_delta)
                 ys.append(y_i)
 
@@ -126,6 +132,7 @@ class Extractor:
         for ch in range(n_chunks):
             chunks.append(y[ch * k:ch * k + k] / gain)
 
+
         # Serial instead of mp.Pool so it dosnt die of OOM
         decoded = [get_message(self.G, decode(self.H, chunk, snr))
                    for chunk in tqdm(chunks, desc='Decoding')]
@@ -136,7 +143,7 @@ class Extractor:
         end = time.time()
         self.logger.info(f'Time to extract {end - start}')
 
-        bits_to_file(extraction_path / f'{malware_name}.no_execute',
+        bits_to_file(extraction_path / f'{payload_name}.no_execute',
                      x[:self.payload_length])
 
         str_payload = ''.join(str(l) for l in x[:self.payload_length])
