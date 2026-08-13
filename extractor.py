@@ -132,8 +132,8 @@ class Extractor:
         for ch in range(n_chunks):
             chunks.append(y[ch * k:ch * k + k] / gain)
 
-        # ponytail: serial in loc de mp.Pool — forkserver pickla self.G (~300MB) la
-        # fiecare worker => OOM. Cateva chunk-uri, decode-ul serial e ok si nu moare.
+
+        # Serial instead of mp.Pool so it dosnt die of OOM
         decoded = [get_message(self.G, decode(self.H, chunk, snr))
                    for chunk in tqdm(chunks, desc='Decoding')]
 
