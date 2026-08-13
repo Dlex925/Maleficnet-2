@@ -27,6 +27,6 @@ The base acc might be lower(71 instead of 73) because I used vgg, not vgg_bn in 
 
 To do:
 
-Try with bigger payloads.
-Retry with vgg_bn
-Logging
+Try with bigger payloads.  
+~Retry with vgg_bn~  
+Update logging
