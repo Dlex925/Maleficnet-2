@@ -138,3 +138,5 @@ outputs/
 checkpoints/
 *.csv
 *.pdf
+*.notes
+backup/

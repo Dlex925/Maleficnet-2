@@ -19,6 +19,7 @@ class VGG16(pl.LightningModule):
 
         #self.model = models.vgg16_bn(weights="DEFAULT")
         self.model = models.vgg16(weights="DEFAULT") # Testing, the bn might be the problem when not training
+        #Idk why without training, chaning from vgg to vgg_bn, makes the acc-drop go from 2e-4 to 1.6e-3 on stuxnet
         if not only_pretrained:
             num_ftrs = self.model.classifier[6].in_features
             self.model.classifier[6] = nn.Linear(num_ftrs, num_classes)
