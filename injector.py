@@ -88,7 +88,7 @@ class Injector:
 
         return len(b)
 
-    def inject(self, model, gamma: Optional[float] = None):
+    def inject(self, model, gamma: Optional[float] = None, carriers=None):
         start = time.time()
 
         model_st_dict = model.state_dict()
@@ -134,9 +134,17 @@ class Injector:
                 f'Spreading codes cannot be bigger than the model!')
             return
 
-        np.random.seed(self.seed)
-        filter_indexes = np.random.randint(
-            0, len(models_w), self.CHUNK_SIZE * self.chunk_factor * number_of_chunks, np.int32).tolist()
+        #------- hessian carriers -------
+        n_carriers = self.CHUNK_SIZE * self.chunk_factor * number_of_chunks
+        if carriers is not None and len(carriers) >= n_carriers:
+            filter_indexes = [int(i) for i in carriers[:n_carriers]]
+        else:
+            if carriers is not None:
+                self.logger.critical('Not enough carriers in the curvature band; falling back to random!')
+            np.random.seed(self.seed)
+            filter_indexes = np.random.randint(
+                0, len(models_w), n_carriers, np.int32).tolist()
+        #------- /hessian carriers -------
 
         self.logger.info(
             f'Injecting on {self.CHUNK_SIZE * self.chunk_factor} * {number_of_chunks} = {self.CHUNK_SIZE * self.chunk_factor * number_of_chunks} parameters')

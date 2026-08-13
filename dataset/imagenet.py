@@ -46,7 +46,7 @@ class IMAGENET(pl.LightningDataModule):
         self.test_dataset.transform = transform['val']
 
         # For making cpu testing faster try 5k instead of 50k images
-        #self.test_dataset = Subset(val, range(0, len(val), 10))
+        self.test_dataset = Subset(val, range(0, len(val), 10))
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, num_workers=self.num_workers, shuffle=True)

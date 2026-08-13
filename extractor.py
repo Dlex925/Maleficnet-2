@@ -54,7 +54,7 @@ class Extractor:
         self.H, self.G = make_ldpc(
             n, d_v, d_c, systematic=True, sparse=True, seed=seed)
 
-    def extract(self, model, rand_model, message_length, payload_name):
+    def extract(self, model, rand_model, message_length, payload_name, carriers=None):
         extraction_path = self.result_path
         extraction_path.mkdir(parents=True, exist_ok=True)
 
@@ -87,9 +87,15 @@ class Extractor:
                 f'Spreading codes cannot be bigger than the model!')
             return
 
-        np.random.seed(self.seed)
-        filter_indexes = np.random.randint(
-            0, len(models_w_prev), self.CHUNK_SIZE * self.chunk_factor * number_of_chunks, np.int32).tolist()
+        #------- hessian carriers -------
+        n_carriers = self.CHUNK_SIZE * self.chunk_factor * number_of_chunks
+        if carriers is not None and len(carriers) >= n_carriers:
+            filter_indexes = [int(i) for i in carriers[:n_carriers]]
+        else:
+            np.random.seed(self.seed)
+            filter_indexes = np.random.randint(
+                0, len(models_w_prev), n_carriers, np.int32).tolist()
+        #------- /hessian carriers -------
 
         x = []
         ys = []
@@ -134,8 +140,13 @@ class Extractor:
 
 
         # Serial instead of mp.Pool so it dosnt die of OOM
-        decoded = [get_message(self.G, decode(self.H, chunk, snr))
-                   for chunk in tqdm(chunks, desc='Decoding')]
+        # decoded = [get_message(self.G, decode(self.H, chunk, snr))
+        #            for chunk in tqdm(chunks, desc='Decoding')]
+
+        # Extracting with 6 workers
+        d = (decode(self.H, ch, snr) for ch in chunks)
+        with mp.get_context("fork").Pool(6, initializer=worker_init, initargs=(partial(get_message, self.G),)) as pool:
+            decoded = list(tqdm(pool.imap(worker, d), total=len(chunks), desc='Decoding'))
 
         for dec in decoded:
             x.extend(dec)
