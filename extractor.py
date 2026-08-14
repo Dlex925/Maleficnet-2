@@ -128,6 +128,9 @@ class Extractor:
         gain = np.mean(np.multiply(y[:200], preamble))
         sigma = np.std(np.multiply(y[:200], preamble) / gain)
         snr = -20 * np.log10(sigma)
+        #------- snr-record -------
+        self.snr = snr
+        #------- /snr-record -------
         self.logger.info(f'Signal to Noise Ratio = {snr}')
 
         k = self.G.shape[0]
