@@ -267,7 +267,7 @@ if __name__ == '__main__':
                         help='Pick injection carriers by |diag(H)| curvature band instead of random.')
     parser.add_argument('--band', default=0.5, type=float,
                         help='Upper bound of the curvature fraction to draw hessian carriers from (0..1). '
-                             'Bigger payloads need a wider band; see run_all.sh for per-payload values.')
+                             'Bigger payloads need a wider band.')
 
     args = parser.parse_args()
     torch.manual_seed(args.random_seed)
