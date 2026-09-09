@@ -87,15 +87,16 @@ class Extractor:
                 f'Spreading codes cannot be bigger than the model!')
             return
 
-        #------- hessian carriers -------
         n_carriers = self.CHUNK_SIZE * self.chunk_factor * number_of_chunks
-        if carriers is not None and len(carriers) >= n_carriers:
-            filter_indexes = [int(i) for i in carriers[:n_carriers]]
+        if carriers is not None:
+            c = np.asarray(carriers.tolist() if hasattr(carriers, "tolist") else carriers, dtype=np.int64)
+            if len(c) < n_carriers:
+                c = c[np.arange(n_carriers) % len(c)]  # same tiling as the injector
+            filter_indexes = c[:n_carriers].tolist()
         else:
             np.random.seed(self.seed)
             filter_indexes = np.random.randint(
                 0, len(models_w_prev), n_carriers, np.int32).tolist()
-        #------- /hessian carriers -------
 
         x = []
         ys = []
@@ -128,9 +129,7 @@ class Extractor:
         gain = np.mean(np.multiply(y[:200], preamble))
         sigma = np.std(np.multiply(y[:200], preamble) / gain)
         snr = -20 * np.log10(sigma)
-        #------- snr-record -------
         self.snr = snr
-        #------- /snr-record -------
         self.logger.info(f'Signal to Noise Ratio = {snr}')
 
         k = self.G.shape[0]
@@ -141,12 +140,7 @@ class Extractor:
         for ch in range(n_chunks):
             chunks.append(y[ch * k:ch * k + k] / gain)
 
-
-        # Serial instead of mp.Pool so it dosnt die of OOM
-        # decoded = [get_message(self.G, decode(self.H, chunk, snr))
-        #            for chunk in tqdm(chunks, desc='Decoding')]
-
-        # Extracting with 6 workers
+        # decode in parallel
         d = (decode(self.H, ch, snr) for ch in chunks)
         with mp.get_context("fork").Pool(6, initializer=worker_init, initargs=(partial(get_message, self.G),)) as pool:
             decoded = list(tqdm(pool.imap(worker, d), total=len(chunks), desc='Decoding'))

@@ -1,29 +1,20 @@
-# Hessian-guided carrier selection for MaleficNet injection.
-# Replaces the uniform random carrier draw with positions in the low-curvature
-# band of |diag(H)| (flat loss directions => least accuracy impact).
 import torch
 from torch import nn
 
-# Carrier layers. BN weights & everything else stay +inf => never selected.
+# only conv/linear weights carry the payload; everything else stays +inf and is never selected
 LAYER_TYPES = (nn.Conv2d, nn.Linear)
-# Band of the (normalised) curvature distribution to draw carriers from.
-# Low band = flattest weights = least accuracy damage. Narrow it for less drop.
-# ponytail: (0.0, 0.5) is a safe default (pool ~= half the carrier weights,
-# always >> carriers needed). Tighten toward (0.0, 0.1) for a smaller acc drop.
+# fraction of the |diag(H)| distribution to draw carriers from, flattest first
 BAND = (0.0, 0.5)
 
 
 def flatten(model):
-    # Index space IDENTICAL to injector/extractor models_w:
-    # concat of state_dict[w].flatten() over the "weight" keys, minus the last.
+    # same index space as injector/extractor: the "weight" keys minus the last one
     sd = model.state_dict()
     names = [n for n in sd.keys() if "weight" in str(n)][:-1]
     sizes = {n: sd[n].numel() for n in names}
     return None, names, sizes
 
 
-# Hutchinson |diag(H)| over Conv2d/Linear weights, normalised to [0, 1] on the
-# carrier pool. Pool entries outside those layers stay +inf and are never picked.
 def hessian_diagonal(model, loader, criterion, device, n_samples=256):
     _, names, sizes = flatten(model)
     offsets, total = {}, 0
@@ -31,10 +22,13 @@ def hessian_diagonal(model, loader, criterion, device, n_samples=256):
         offsets[name], total = total, total + sizes[name]
     modules = [(name + ".weight", m) for name, m in model.named_modules()
                if isinstance(m, LAYER_TYPES) and name + ".weight" in offsets]
-    weights = [m.weight for _, m in modules]
-    diagonal = [torch.zeros_like(w) for w in weights]
 
+    # move before reading weights so grads/hv and the accumulators share `device`
+    model.to(device)
     model.eval()
+    weights = [m.weight for _, m in modules]
+    diagonal = [torch.zeros_like(w, device=device) for w in weights]
+
     seen = 0
     for x, y in loader:
         if seen >= n_samples:
@@ -42,7 +36,6 @@ def hessian_diagonal(model, loader, criterion, device, n_samples=256):
         x, y = x.to(device), y.to(device)
         batch = min(len(x), n_samples - seen)
         model.zero_grad(set_to_none=True)
-        # model(x) returns log_softmax; criterion is nll_loss (no double softmax).
         grads = torch.autograd.grad(criterion(model(x), y), weights, create_graph=True)
         v = [torch.randint(0, 2, g.shape, device=device, dtype=torch.float32).mul_(2).sub_(1)
              for g in grads]
@@ -59,14 +52,61 @@ def hessian_diagonal(model, loader, criterion, device, n_samples=256):
     return (out - finite.min()) / (finite.max() - finite.min()).clamp_min(1e-12)
 
 
-# Carrier order replacing the uniform draw: the BAND of the curvature
-# distribution, shuffled so the payload is not piled into the first layers.
-# ponytail: rank-based (argsort) not value-threshold — a skewed |diag(H)| makes
-# the median ~= min and a threshold band collapses to empty. Rank guarantees size.
-def curvature_carriers(model, loader, criterion, device, seed, n_samples=256):
+def curvature_carriers(model, loader, criterion, device, seed, n_samples=256, band=BAND):
     h = hessian_diagonal(model, loader, criterion, device, n_samples)
     finite_idx = torch.nonzero(h.isfinite()).flatten()
-    order = finite_idx[h[finite_idx].argsort()]  # carrier weights, flattest first
+    order = finite_idx[h[finite_idx].argsort()]
     n = order.numel()
-    pool = order[int(n * BAND[0]):int(n * BAND[1])]
+    pool = order[int(n * band[0]):int(n * band[1])]
     return pool[torch.randperm(pool.numel(), generator=torch.Generator().manual_seed(seed))]
+
+
+if __name__ == "__main__":
+    # self-check: python hessian.py
+    import torch.nn.functional as F
+    from torch.utils.data import DataLoader, TensorDataset
+
+    class Tiny(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.c1 = nn.Conv2d(3, 8, 3, padding=1)
+            self.bn = nn.BatchNorm2d(8)
+            self.c2 = nn.Conv2d(8, 4, 3, padding=1)
+            self.fc = nn.Linear(4 * 8 * 8, 5)
+
+        def forward(self, x):
+            x = self.c2(torch.relu(self.bn(self.c1(x))))
+            return F.log_softmax(self.fc(x.flatten(1)), dim=1)
+
+    loader = DataLoader(TensorDataset(torch.randn(64, 3, 8, 8),
+                                      torch.randint(0, 5, (64,))), batch_size=8)
+
+    for dev in ["cpu"] + (["cuda"] if torch.cuda.is_available() else []):
+        model = Tiny().cpu()
+        torch.manual_seed(0)
+        carriers = curvature_carriers(model, loader, F.nll_loss, dev, seed=42, n_samples=32)
+
+        sd = model.state_dict()
+        names = [n for n in sd.keys() if "weight" in str(n)][:-1]
+        total = sum(sd[n].numel() for n in names)
+        assert names == ["c1.weight", "bn.weight", "c2.weight"], names
+        assert carriers.device.type == "cpu", carriers.device
+        assert carriers.min() >= 0 and carriers.max() < total
+        assert carriers.unique().numel() == carriers.numel()
+
+        bn_lo = sd["c1.weight"].numel()
+        bn_hi = bn_lo + sd["bn.weight"].numel()
+        assert not ((carriers >= bn_lo) & (carriers < bn_hi)).any(), "BN weight selected"
+
+        torch.manual_seed(0)
+        h = hessian_diagonal(model, loader, F.nll_loss, dev, 32)
+        assert h.device.type == "cpu" and h.numel() == total
+        n_finite = int(h.isfinite().sum())
+        assert n_finite == total - (bn_hi - bn_lo)
+        assert carriers.numel() == int(n_finite * BAND[1]) - int(n_finite * BAND[0])
+        assert h[carriers].max() <= h[h.isfinite()].median(), "pool outside the flat band"
+
+        torch.manual_seed(0)
+        again = curvature_carriers(model, loader, F.nll_loss, dev, seed=42, n_samples=32)
+        assert torch.equal(carriers, again), "seed does not pin the shuffle"
+        print(f"{dev}: ok, pool {carriers.numel()}/{n_finite} carriers")

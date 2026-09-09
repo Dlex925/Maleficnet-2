@@ -94,7 +94,7 @@ def initialize_model(model_name, dim, num_classes, only_pretrained):
     return model
 
 
-def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_workers, payload, only_pretrained, fine_tuning, chunk_factor, hessian=False):
+def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_workers, payload, only_pretrained, fine_tuning, chunk_factor, hessian=False, band=0.5):
     # checkpoint path
     checkpoint_path = Path(os.getcwd()) / 'checkpoints'
     checkpoint_path.mkdir(parents=True, exist_ok=True)
@@ -154,12 +154,10 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         message_length = injector.get_message_length(model)
 
     rand_model = initialize_model(model_name, dim, num_classes, only_pretrained)
-    if not only_pretrained: #Added extra
+    if not only_pretrained:
         rand_model.apply(weights_init_normal)
 
-    #------- hessian -------
     carriers = None
-    #------- /hessian -------
 
     if not fine_tuning:
         trainer = pl.Trainer(max_epochs=epochs,
@@ -188,7 +186,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         # Test the model
         trainer.test(model, data)
 
-        #------- hessian carrier selection -------
+        # hessian carrier selection
         if hessian:
             import torch.nn.functional as F
             from torch.utils.data import DataLoader
@@ -196,10 +194,8 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
             data.setup()
             hess_loader = DataLoader(data.test_dataset, batch_size=8,
                                      shuffle=True, num_workers=0)
-            # model(x) returns log_softmax => nll_loss is the matching criterion
-            carriers = curvature_carriers(model, hess_loader, F.nll_loss, device, seed=42)
+            carriers = curvature_carriers(model, hess_loader, F.nll_loss, device, seed=42, band=(0.0, band))
             log.info(f'Curvature carriers: pool of {len(carriers)} positions')
-        #------- /hessian carrier selection -------
 
         # Inject the payload
         new_model_sd, message_length, payload_length, hash_length = injector.inject(model, gamma, carriers)
@@ -237,8 +233,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         del trainer
 
     success = extractor.extract(model, rand_model, message_length, payload, carriers)
-    log.info('System  {}'.format(
-        'successfully! ' if success else 'unsuccessfully :('))
+    print('System successfully' if success else 'System unsuccessfully', flush=True)
 
 
 if __name__ == '__main__':
@@ -268,10 +263,11 @@ if __name__ == '__main__':
                         help='The payload to inject in the model.')
     parser.add_argument('--gamma', type=float, default=0.0009,
                         help='The gamma used to inject.')
-    #------- hessian -------
     parser.add_argument('--hessian', default=False, action='store_true',
                         help='Pick injection carriers by |diag(H)| curvature band instead of random.')
-    #------- /hessian -------
+    parser.add_argument('--band', default=0.5, type=float,
+                        help='Upper bound of the curvature fraction to draw hessian carriers from (0..1). '
+                             'Bigger payloads need a wider band; see run_all.sh for per-payload values.')
 
     args = parser.parse_args()
     torch.manual_seed(args.random_seed)
@@ -288,4 +284,5 @@ if __name__ == '__main__':
          only_pretrained=args.only_pretrained,
          fine_tuning=args.fine_tuning,
          chunk_factor=6,
-         hessian=args.hessian)
+         hessian=args.hessian,
+         band=args.band)
